@@ -149,9 +149,21 @@ def pending_tool_calls(state: AgentState):
 
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
 
+from IPython.display import Image, display
+    
+def generate_graph_diagram(graph):
+    try:
+        diagram = Image(graph.get_graph().draw_mermaid_png())
+        with open("graph_diagram.png", "wb") as f:
+            f.write(diagram.data)
+        print("Graph diagram generated")
+    except Exception:
+        print("Error generating graph diagram")
+
 research_assistant = agent.compile(
     checkpointer=MemorySaver(),
 )
+generate_graph_diagram(research_assistant)
 
 
 if __name__ == "__main__":
