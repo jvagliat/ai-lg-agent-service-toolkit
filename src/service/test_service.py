@@ -1,15 +1,16 @@
-from langchain_core.messages import AIMessage
-from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
-from service import app
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
+
 from schema import ChatMessage
+from service import app
 
 client = TestClient(app)
 
 
 @patch("service.service.research_assistant")
-def test_invoke(mock_agent):
+def test_invoke(mock_agent: TestClient) -> None:
     QUESTION = "What is the weather in Tokyo?"
     ANSWER = "The weather in Tokyo is 70 degrees."
     agent_response = {"messages": [AIMessage(content=ANSWER)]}
@@ -29,7 +30,7 @@ def test_invoke(mock_agent):
 
 
 @patch("service.service.LangsmithClient")
-def test_feedback(mock_client):
+def test_feedback(mock_client: TestClient) -> None:
     ls_instance = mock_client.return_value
     ls_instance.create_feedback.return_value = None
     body = {

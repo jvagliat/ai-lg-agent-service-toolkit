@@ -1,22 +1,30 @@
-from datetime import datetime
 import os
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI
+from datetime import datetime
+from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
 from langchain_community.tools import DuckDuckGoSearchResults, OpenWeatherMapQueryRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig, RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph, MessagesState
+from langgraph.graph import END, MessagesState, StateGraph
 from langgraph.managed import IsLastStep
 from langgraph.prebuilt import ToolNode
 
-from agent.tools import calculator
 from agent.llama_guard import LlamaGuard, LlamaGuardOutput, SafetyAssessment
+from agent.tools import calculator
 
 
-class AgentState(MessagesState):
+class AgentState(MessagesState, total=False):
+    """`total=False` is PEP589 specs.
+
+    documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
+    """
+
     safety: LlamaGuardOutput
     is_last_step: IsLastStep
 
@@ -32,6 +40,10 @@ if os.getenv("GROQ_API_KEY") is not None:
 if os.getenv("GOOGLE_API_KEY") is not None:
     models["gemini-1.5-flash"] = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash", temperature=0.5, streaming=True
+    )
+if os.getenv("ANTHROPIC_API_KEY") is not None:
+    models["claude-3-haiku"] = ChatAnthropic(
+        model="claude-3-haiku-20240307", temperature=0.5, streaming=True
     )
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
@@ -57,7 +69,7 @@ instructions = f"""
     """
 
 
-def wrap_model(model: BaseChatModel):
+def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessage]:
     model = model.bind_tools(tools)
     preprocessor = RunnableLambda(
         lambda state: [SystemMessage(content=instructions)] + state["messages"],
@@ -73,7 +85,7 @@ def format_safety_message(safety: LlamaGuardOutput) -> AIMessage:
     return AIMessage(content=content)
 
 
-async def acall_model(state: AgentState, config: RunnableConfig):
+async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     m = models[config["configurable"].get("model", "gpt-4o-mini")]
     model_runnable = wrap_model(m)
     response = await model_runnable.ainvoke(state, config)
@@ -97,13 +109,13 @@ async def acall_model(state: AgentState, config: RunnableConfig):
     return {"messages": [response]}
 
 
-async def llama_guard_input(state: AgentState, config: RunnableConfig):
+async def llama_guard_input(state: AgentState, config: RunnableConfig) -> AgentState:
     llama_guard = LlamaGuard()
     safety_output = await llama_guard.ainvoke("User", state["messages"])
     return {"safety": safety_output}
 
 
-async def block_unsafe_content(state: AgentState, config: RunnableConfig):
+async def block_unsafe_content(state: AgentState, config: RunnableConfig) -> AgentState:
     safety: LlamaGuardOutput = state["safety"]
     return {"messages": [format_safety_message(safety)]}
 
@@ -118,7 +130,7 @@ agent.set_entry_point("guard_input")
 
 
 # Check for unsafe input and block further processing if found
-def check_safety(state: AgentState):
+def check_safety(state: AgentState) -> Literal["unsafe", "safe"]:
     safety: LlamaGuardOutput = state["safety"]
     match safety.safety_assessment:
         case SafetyAssessment.UNSAFE:
@@ -139,12 +151,11 @@ agent.add_edge("tools", "model")
 
 
 # After "model", if there are tool calls, run "tools". Otherwise END.
-def pending_tool_calls(state: AgentState):
+def pending_tool_calls(state: AgentState) -> Literal["tools", "done"]:
     last_message = state["messages"][-1]
     if last_message.tool_calls:
         return "tools"
-    else:
-        return "done"
+    return "done"
 
 
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
@@ -169,11 +180,12 @@ generate_graph_diagram(research_assistant)
 if __name__ == "__main__":
     import asyncio
     from uuid import uuid4
+
     from dotenv import load_dotenv
 
     load_dotenv()
 
-    async def main():
+    async def main() -> None:
         inputs = {"messages": [("user", "Find me a recipe for chocolate chip cookies")]}
         result = await research_assistant.ainvoke(
             inputs,
